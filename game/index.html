@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEON PALMS — a San Verde crime story</title>
+<script>
+  window.__errors = [];
+  window.addEventListener('error', (e) => { window.__errors.push(String(e.message || e.error || 'error')); });
+</script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="game-canvas"></div>
+<div id="dmg-layer"></div>
+<div id="hud" class="hidden"></div>
+<div id="map-screen" class="hidden overlay"></div>
+<div id="stats-screen" class="hidden overlay"></div>
+<div id="title-screen"></div>
+<script src="vendor/three.min.js"></script>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
