@@ -1,132 +1,126 @@
-// NEON PALMS — central configuration and shared game state (single source of truth).
-// Every other module imports G from here; G is the one mutable world state object.
+// NEON PALMS — every tuning number, colour and name in one place. The world is a fixed
+// 5200x3800 sheet of city; the camera picks a window into it, so nothing below depends on
+// the size of the player's screen. Districts, the respect ladder and the radio dial live
+// here because missions, the HUD and the map all read the same tables.
 
-export const CFG = {
-  world: 340,                 // half-extent of the playable city in metres
-  roadLines: [-300, -180, -60, 60, 180, 300],
-  fixedDt: 1 / 60,
-  startCash: 1250,
-  gravity: 0,
+export const STEP = 1 / 60;
+
+/** World sheet, in world units (roughly metres at city scale). */
+export const WORLD = { width: 5200, height: 3800 };
+
+/** Street grid: blocks of BLOCK_W x BLOCK_H separated by ROAD-wide avenues and streets. */
+export const GRID = {
+  cols: 6,
+  rows: 5,
+  blockW: 560,
+  blockH: 420,
+  road: 150,
+  get pitchX() { return this.blockW + this.road; },
+  get pitchY() { return this.blockH + this.road; },
+  /** West edge of the built city; east of it lie the sand and the sea. */
+  get cityEast() { return this.cols * this.blockW + (this.cols + 1) * this.road; },
 };
+
+/** x where the sand starts and where the sand meets the water. */
+export const BEACH = { sandX: 4560, waterX: 4840 };
 
 export const DISTRICTS = [
-  { name: 'Palms Strip',        x0: -180, z0: 180,  x1: 180,  z1: 340,  color: '#ff5fa2', tint: '#3a1e33' },
-  { name: 'Club Mile',          x0: -340, z0: -60,  x1: -60,  z1: 180,  color: '#c44dff', tint: '#241433' },
-  { name: 'The Underpass',      x0: -340, z0: -340, x1: -60,  z1: -60,  color: '#37c8ff', tint: '#12242e' },
-  { name: 'Puerto Alba',        x0: 60,   z0: 60,   x1: 340,  z1: 340,  color: '#ffb347', tint: '#33241a' },
-  { name: 'Heights of San Verde', x0: 60, z0: -340, x1: 340,  z1: -60,  color: '#7dff9a', tint: '#1c2e1e' },
-  { name: 'Old Town Grid',      x0: -60,  z0: -340, x1: 60,   z1: 340,  color: '#ffe066', tint: '#2e2a18' },
+  { id: 'cielo', name: 'CIELO HEIGHTS', short: 'CIELO', tone: '#3d5a80', neon: '#9fd8ff', wealth: 3, blurb: 'Gated palms, hill money, quiet streets.' },
+  { id: 'quarter', name: 'OLD QUARTER', short: 'QUARTER', tone: '#7a4a3a', neon: '#ffb35c', wealth: 1, blurb: 'Bodegas, murals and grandmothers who see everything.' },
+  { id: 'flats', name: 'THE FLATS', short: 'FLATS', tone: '#4a4a55', neon: '#c0c8ff', wealth: 0, blurb: 'Lowriders, warehouses, Vesper country.' },
+  { id: 'neon', name: 'NEON MILE', short: 'NEON MILE', tone: '#23304d', neon: '#ff4fd8', wealth: 2, blurb: 'Clubs, marquees and the Solstice Crew\u2019s front door.' },
+  { id: 'port', name: 'PORT AZURE', short: 'PORT', tone: '#2e4a4f', neon: '#4fe3c1', wealth: 1, blurb: 'Cranes, containers and things that fall off boats.' },
+  { id: 'coral', name: 'CORAL BEACH', short: 'CORAL', tone: '#6b4a63', neon: '#ff8a5c', wealth: 3, blurb: 'Resorts, beach clubs and rented sunshine.' },
 ];
 
-export function districtAt(x, z) {
-  for (const d of DISTRICTS) if (x >= d.x0 && x < d.x1 && z >= d.z0 && z < d.z1) return d;
-  return DISTRICTS[5];
-}
-
-// RESPECT ladder — named ranks, each with a named unlock.
-export const RANKS = [
-  { name: 'NOBODY',        need: 0,    unlock: 'Palms Runner (starter coupe)' },
-  { name: 'CURB CRAWLER',  need: 50,   unlock: 'Neón Comet hatchback' },
-  { name: 'STREET NAME',   need: 120,  unlock: 'Marea Lowrider + Club Mile garage' },
-  { name: 'BLOCK BURNER',  need: 220,  unlock: 'Válvula GT sports coupe' },
-  { name: 'CREW REGULAR',  need: 350,  unlock: 'Alba Interceptor bait car' },
-  { name: 'PALMS ROYALTY', need: 520,  unlock: 'Comet S widebody kit' },
-  { name: 'MIDNIGHT ROYALTY', need: 750, unlock: 'Ríos Special — pink-slip flagship' },
-  { name: 'PALMS LEGEND',  need: 1000, unlock: 'Golden Neón livery + crew crown' },
+/** District per grid block, [row][col], indexes into DISTRICTS. */
+export const DISTRICT_GRID = [
+  [0, 0, 1, 1, 5, 5],
+  [0, 0, 1, 1, 5, 5],
+  [2, 2, 3, 3, 5, 5],
+  [2, 2, 3, 3, 4, 4],
+  [2, 2, 4, 4, 4, 4],
 ];
 
-export const CAR_MODELS = [
-  { name: 'Palms Runner',   top: 34, accel: 15, color: 0xff5fa2, price: 0 },
-  { name: 'Neón Comet',     top: 40, accel: 18, color: 0x37c8ff, price: 4200 },
-  { name: 'Marea Lowrider', top: 38, accel: 16, color: 0xc44dff, price: 6800 },
-  { name: 'Válvula GT',     top: 50, accel: 24, color: 0xffb347, price: 14500 },
-  { name: 'Alba Interceptor', top: 54, accel: 26, color: 0xf2f2f2, price: 21000 },
-  { name: 'Ríos Special',   top: 60, accel: 30, color: 0xffe066, price: 40000 },
-];
-
-export const WEAPONS = [
-  { name: 'Fists',    icon: '✊', ammo: Infinity, price: 0,     dmg: 8,  rate: 0.35, locked: false },
-  { name: 'Pistol',   icon: '🔫', ammo: 48,       price: 650,   dmg: 22, rate: 0.28, locked: false },
-  { name: 'SMG',      icon: '💥', ammo: 120,      price: 1900,  dmg: 14, rate: 0.09, locked: false },
-  { name: 'Shotgun',  icon: '🧨', ammo: 24,       price: 3200,  dmg: 46, rate: 0.8,  locked: false },
-  { name: 'Rifle',    icon: '🎯', ammo: 90,       price: 5400,  dmg: 30, rate: 0.14, locked: false },
-  { name: 'Marksman', icon: '🔭', ammo: 20,       price: 9800,  dmg: 85, rate: 1.1,  locked: true },
-];
-
-export const RADIO = [
-  { name: 'Neón 99.9',        tracks: ['Válvula — "Bomba de Neón"', 'DJ Palma — "Avenida Lights"', 'Los Faros — "Gasolina Rosa"'] },
-  { name: 'Palms Classics 88.1', tracks: ['Orquesta Alba — "Bolero del Puerto"', 'Marina Sol — "Brisa del 78"', 'The Verde Trio — "San Verde Nights"'] },
-];
-
-export const CREW = [
-  { name: 'Dario', role: 'Wheelman',   key: 'Z', label: 'NITRO CACHE', cd: 20, color: '#37c8ff' },
-  { name: 'Paz',   role: 'Wrench',     key: 'X', label: 'QUICK FIX',   cd: 25, color: '#7dff9a' },
-  { name: 'Ivo',   role: 'Lookout',    key: 'C', label: 'EYES OUT',    cd: 30, color: '#ffe066' },
-];
-
-export const BOSS = { name: "Valentina 'Válvula' Ríos", role: 'Crew Boss — Ríos Racing Family', initials: 'VR', color: '#ff5fa2' };
-
-// The one shared mutable state object.
-export const G = {
-  mode: 'title',            // title | play
-  paused: false,
-  mapOpen: false,
-  statsOpen: false,
-  time: 0,                  // simulated seconds (never wall-clock)
-  tod: 17.7,                // time of day in hours — starts at golden hour
-  clockMin: 17 * 60 + 42,
-  cash: CFG.startCash,
-  respect: 0,
-  health: 100, armor: 50,
-  wanted: 0, sight: 'SEARCHING', sightTimer: 0, heatTimer: 0,
-  weapon: 1, fireCd: 0,
-  radio: 0, radioTrack: 0, radioTimer: 0,
-  player: { x: -120, z: 250, a: 0, speed: 0, inCar: null, mesh: null, walkPhase: 0 },
-  cars: [], peds: [], cops: [], heli: null,
-  feed: [],               // dispatch / event feed lines {t, text}
-  dialogue: null,         // {who, role, line, color, initials, until}
-  banner: null,           // mission passed banner {title, lines, until}
-  prompt: '',             // contextual E prompt
-  crewCd: [0, 0, 0],
-  eyesOut: 0,
-  stats: {
-    missionsDone: 0, racesWon: 0, racesRun: 0, duelsWon: 0, duelsRun: 0,
-    collectibles: 0, collectTotal: 12, shotsFired: 0, carsStolen: 0,
-    topSpeed: 0, distanceKm: 0, earned: 0,
-    medals: {},           // missionId -> 'GOLD'|'SILVER'|'BRONZE'
-  },
-  mission: null,          // active mission runtime
-  missionIdx: 0,          // next story mission index
-  race: null,             // active race runtime
-  duel: null,
-  collectibles: [],
-  districtStanding: {},   // district name -> respect earned there
-  saveSlot: 1,
-  camShake: 0,
-  night: false,
-  msg: '', msgUntil: 0,
+export const PALETTE = {
+  backdrop: '#0b0714',
+  asphalt: '#23222b',
+  asphaltEdge: '#191820',
+  lane: '#d8c98a',
+  sidewalk: '#3a3742',
+  curb: '#55505f',
+  sand: '#cfa96f',
+  sandWet: '#b28c55',
+  water: '#0d3b56',
+  waterDeep: '#082a40',
+  waterFoam: '#bfeaff',
+  grass: '#2c4a2e',
+  park: '#33542f',
+  buildingShadow: 'rgba(10,4,20,0.42)',
+  panel: 'rgba(12,8,24,0.82)',
+  panelEdge: '#ff4fd8',
+  text: '#f5eefc',
+  muted: '#a79fc0',
+  gold: '#ffd257',
+  neonPink: '#ff4fd8',
+  neonCyan: '#39e6ff',
+  neonTeal: '#4fe3c1',
+  neonOrange: '#ff8a5c',
+  danger: '#ff4f5e',
+  good: '#5cff9d',
+  policeBlue: '#3f7bff',
+  policeRed: '#ff3b4e',
 };
 
-export function feed(text) {
-  G.feed.unshift({ t: G.time, text });
-  if (G.feed.length > 6) G.feed.pop();
+export const FONT = '"Avenir Next", "Segoe UI", system-ui, sans-serif';
+export const FONT_DISPLAY = '"Arial Black", "Avenir Next Heavy", "Segoe UI", sans-serif';
+
+/** Respect ladder: name and the REP total that earns it. */
+export const RANKS = [
+  { name: 'NOBODY', at: 0 },
+  { name: 'RUNNER', at: 100 },
+  { name: 'WHEELMAN', at: 250 },
+  { name: 'STREET NAME', at: 450 },
+  { name: 'BLOCK ROYALTY', at: 700 },
+  { name: 'CREW CAPTAIN', at: 1000 },
+  { name: 'PALMS ROYALTY', at: 1400 },
+  { name: 'NEON CROWN', at: 2000 },
+];
+
+export function rankFor(rep) {
+  let rank = RANKS[0];
+  for (const entry of RANKS) if (rep >= entry.at) rank = entry;
+  return rank;
 }
-export function say(who, line, secs = 6) {
-  G.dialogue = { who: who.name, role: who.role, line, color: who.color, initials: who.initials || who.name.slice(0, 2).toUpperCase(), until: G.time + secs };
+
+export function nextRank(rep) {
+  for (const entry of RANKS) if (rep < entry.at) return entry;
+  return null;
 }
-export function rankIdx() {
-  let i = 0;
-  for (let k = 0; k < RANKS.length; k++) if (G.respect >= RANKS[k].need) i = k;
-  return i;
-}
-export function rankProgress() {
-  const i = rankIdx();
-  if (i >= RANKS.length - 1) return { i, frac: 1, cur: RANKS[i].need, next: RANKS[i].need };
-  const cur = RANKS[i].need, next = RANKS[i + 1].need;
-  return { i, frac: (G.respect - cur) / (next - cur), cur, next };
-}
-export function addRespect(n, districtName) {
-  G.respect += n;
-  if (districtName) G.districtStanding[districtName] = (G.districtStanding[districtName] || 0) + n;
-}
-export function addCash(n) { G.cash += n; if (n > 0) G.stats.earned += n; }
+
+/** Radio dial: name, frequency and the flavour line the HUD ticker shows. */
+export const RADIO = [
+  { name: 'OLA 101.5', tag: 'Salsa brava y reguet\u00f3n viejo', bpm: 96 },
+  { name: 'MIDNIGHT 92.3', tag: 'Synthwave para manejar de noche', bpm: 104 },
+  { name: 'PALMS TALK 770', tag: 'Tr\u00e1fico, clima y chisme', bpm: 0 },
+  { name: 'BRISA 88.9', tag: 'Boleros al atardecer', bpm: 72 },
+];
+
+/** Heat (0..500) maps to stars; crimes add heat, hiding bleeds it away. */
+export const WANTED = {
+  maxHeat: 500,
+  starWidth: 100,
+  decayPerSecond: 3.2,
+  decayHiddenPerSecond: 11,
+  sightRange: 620,
+  bustSeconds: 2.4,
+};
+
+export const SAVE_KEY = 'neon-palms.save.v1';
+export const BEST_KEY = 'neon-palms.best.v1';
+
+/** Camera zooms: on foot tight, driving wider, the staged cover tighter still. */
+export const ZOOM = { foot: 1.15, drive: 0.82, chase: 1.9, map: 0 };
+
+/** Golden hour is where the game lives: 0 = dawn, 0.5 = noon, 0.72 = golden, 1 = midnight. */
+export const DAY = { start: 0.7, length: 1500 };

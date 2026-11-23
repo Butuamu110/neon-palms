@@ -1,161 +1,195 @@
-// NEON PALMS — combat: on-foot shooting with muzzle glow, tracers, floating damage
-// numbers, health/armor, hostile peds and officer fire, player death/respawn.
-import { G, WEAPONS, feed } from './config.js';
-import { scene } from './city.js';
-import { rng, clamp } from './rng.js';
-import { down } from './input.js';
-import { sfx } from './audio.js';
-import { commitCrime } from './police.js';
-import { witnessCrime } from './pedestrians.js';
+// Combat for NEON PALMS: five weapon slots, hitscan tracers, muzzle flash, and a city that
+// reacts. Shots are rays: the nearest body or car along the line takes the hit, sparks fly,
+// witnesses run, and the dispatcher hears about it — louder if the target wears a badge.
+// Mission shooters shoot back with human inaccuracy; carjacked drivers sometimes do too.
 
-export const dmgNumbers = [];   // {x,y,z,val,until,mesh}
-let glowTexCache = null, tracerMat = null, flashMat = null;
-const tracers = [];
+import { CRIME_HEAT } from './police.js';
 
-function glowTex() {
-  if (glowTexCache) return glowTexCache;
-  const c = document.createElement('canvas'); c.width = c.height = 64;
-  const g = c.getContext('2d');
-  const gr = g.createRadialGradient(32, 32, 2, 32, 32, 30);
-  gr.addColorStop(0, 'rgba(255,240,200,1)'); gr.addColorStop(0.4, 'rgba(255,180,60,0.6)'); gr.addColorStop(1, 'rgba(255,140,0,0)');
-  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
-  glowTexCache = new THREE.CanvasTexture(c);
-  return glowTexCache;
+export const WEAPONS = [
+  { id: 'fists', name: 'Fists', slot: 1, damage: 16, rate: 2.2, range: 34, spread: 0, pellets: 1, price: 0, auto: false, ammoMax: Infinity },
+  { id: 'pistol', name: 'P-9 Pistol', slot: 2, damage: 24, rate: 3.4, range: 520, spread: 0.02, pellets: 1, price: 650, auto: false, ammoMax: 240 },
+  { id: 'smg', name: 'VK SMG', slot: 3, damage: 15, rate: 9.5, range: 470, spread: 0.055, pellets: 1, price: 1900, auto: true, ammoMax: 600 },
+  { id: 'shotgun', name: 'Boomstick', slot: 4, damage: 11, rate: 1.15, range: 300, spread: 0.11, pellets: 7, price: 2600, auto: false, ammoMax: 90 },
+  { id: 'rifle', name: 'AR-15 Carbine', slot: 5, damage: 30, rate: 6.5, range: 760, spread: 0.016, pellets: 1, price: 4200, auto: true, ammoMax: 480 },
+];
+
+export function weaponById(id) {
+  return WEAPONS.find((w) => w.id === id);
 }
 
-export function initCombat() {
-  tracerMat = new THREE.LineBasicMaterial({ color: 0xffd94d, transparent: true, opacity: 0.9 });
-  flashMat = new THREE.SpriteMaterial({ map: glowTex(), color: 0xffcf7a, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
-}
+export function createCombat() {
+  return {
+    tracers: [],
+    flashes: [],
+    crimeClock: 0,
 
-function spawnDmgNumber(x, y, z, val, crit) {
-  const c = document.createElement('canvas'); c.width = 96; c.height = 48;
-  const g = c.getContext('2d');
-  g.font = 'bold 30px Arial'; g.textAlign = 'center';
-  g.lineWidth = 5; g.strokeStyle = '#000'; g.strokeText(String(val), 48, 32);
-  g.fillStyle = crit ? '#ff4040' : '#ffe066'; g.fillText(String(val), 48, 32);
-  const tex = new THREE.CanvasTexture(c);
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  s.position.set(x, y, z); s.scale.set(3.4, 1.7, 1);
-  scene.add(s);
-  dmgNumbers.push({ mesh: s, until: G.time + 0.85, vy: 2.2 });
-  // also float a DOM chip for screenshot legibility
-  const el = document.createElement('div');
-  el.className = 'dmg-float'; el.textContent = '-' + val;
-  el.style.left = (44 + rng() * 12) + '%'; el.style.top = (38 + rng() * 10) + '%';
-  document.getElementById('dmg-layer').appendChild(el);
-  setTimeout(() => el.remove(), 850);
-}
-
-function muzzleFlash(x, y, z) {
-  const s = new THREE.Sprite(flashMat.clone());
-  s.position.set(x, y, z); s.scale.set(2.6, 2.6, 1);
-  scene.add(s);
-  tracers.push({ mesh: s, until: G.time + 0.05, isFlash: true });
-}
-
-function tracer(x1, y1, z1, x2, y2, z2) {
-  const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x1, y1, z1), new THREE.Vector3(x2, y2, z2)]);
-  const line = new THREE.Line(geo, tracerMat);
-  scene.add(line);
-  tracers.push({ mesh: line, until: G.time + 0.07 });
-}
-
-export function hurtPlayer(n, label) {
-  if (G.armor > 0) { const absorbed = Math.min(G.armor, n * 0.6); G.armor -= absorbed; n -= absorbed; }
-  G.health -= n;
-  G.camShake = Math.max(G.camShake, 0.3);
-  if (G.health <= 0 && G.mode === 'play') {
-    G.health = 0;
-    feed('SAN VERDE GENERAL — you were dropped; crew pulled you out');
-    const cost = Math.min(500, Math.floor(G.cash * 0.1));
-    G.cash -= cost;
-    G.health = 100; G.armor = 25;
-    G.player.inCar = null;
-    if (G.player.mesh) G.player.mesh.visible = true;
-    G.player.x = 150; G.player.z = 210;   // hospital at Puerto Alba edge
-    G.wanted = 0; G.sight = 'SEARCHING';
-    G.msg = `WASTED — hospital bill $${cost}. Valentina: "Walk it off."`;
-    G.msgUntil = G.time + 5;
-  }
-  void label;
-}
-
-export function updateCombat(dt) {
-  // expire tracers / flashes / damage numbers
-  for (let i = tracers.length - 1; i >= 0; i--) {
-    if (G.time > tracers[i].until) { scene.remove(tracers[i].mesh); tracers.splice(i, 1); }
-  }
-  for (let i = dmgNumbers.length - 1; i >= 0; i--) {
-    const d = dmgNumbers[i];
-    d.mesh.position.y += d.vy * dt;
-    d.mesh.material.opacity = clamp((d.until - G.time) / 0.85, 0, 1);
-    if (G.time > d.until) { scene.remove(d.mesh); dmgNumbers.splice(i, 1); }
-  }
-  // hostile peds + wanted officers shoot back
-  const px = G.player.x, pz = G.player.z;
-  for (const ped of G.peds) {
-    if (ped.dead) continue;
-    const hostileCop = false;
-    if (!ped.hostile && !hostileCop) continue;
-    ped.shootCd -= dt;
-    const dx = px - ped.x, dz = pz - ped.z, d = Math.hypot(dx, dz);
-    if (ped.shootCd <= 0 && d < 30 && d > 2) {
-      ped.shootCd = 0.9 + rng() * 0.7;
-      muzzleFlash(ped.x, 1.45, ped.z);
-      tracer(ped.x, 1.45, ped.z, px, 1.3, pz);
-      sfx('shot');
-      if (rng() < 0.42) hurtPlayer(4 + Math.floor(rng() * 6), 'gunfire');
-    }
-  }
-  // player fire
-  G.fireCd -= dt;
-  const w = WEAPONS[G.weapon];
-  if (G.mode !== 'play' || G.player.inCar || G.mapOpen || G.statsOpen) return;
-  if (!down('KeyF') && !down('Mouse0')) return;
-  if (G.fireCd > 0) return;
-  if (w.ammo !== Infinity && w.ammo <= 0) { G.fireCd = 0.3; G.msg = `${w.name} — OUT OF AMMO`; G.msgUntil = G.time + 1.2; return; }
-  G.fireCd = w.rate;
-  if (w.ammo !== Infinity) w.ammo--;
-  G.stats.shotsFired++;
-  G.lastShotAt = G.time;
-  sfx('shot');
-  const pa = G.player.a;
-  const mx = px + Math.sin(pa) * 0.7, mz = pz + Math.cos(pa) * 0.7;
-  muzzleFlash(mx, 1.45, mz);
-  // nearest hittable target in a forward cone
-  let best = null, bd = 42;
-  const consider = (obj, x, z, isPed) => {
-    const dx = x - px, dz = z - pz, d = Math.hypot(dx, dz);
-    if (d > bd || d < 0.5) return;
-    const ang = Math.atan2(dx, dz);
-    let da = Math.abs(ang - pa); while (da > Math.PI) da = Math.abs(da - Math.PI * 2);
-    if (da < 0.5 || d < 4) { best = { obj, x, z, d, isPed }; bd = d; }
-  };
-  for (const ped of G.peds) if (!ped.dead) consider(ped, ped.x, ped.z, true);
-  for (const car of G.cars) if (!car.dead) consider(car, car.x, car.z, false);
-  const ex = best ? best.x : px + Math.sin(pa) * 30, ez = best ? best.z : pz + Math.cos(pa) * 30;
-  tracer(mx, 1.45, mz, ex, 1.2, ez);
-  witnessCrime('SHOTS FIRED', px, pz);
-  if (G.wanted < 2) commitCrime(2, 'SHOTS FIRED on Club Mile');
-  if (best) {
-    const crit = rng() < 0.18;
-    const dmg = Math.round(w.dmg * (crit ? 1.8 : 1) * (0.85 + rng() * 0.3));
-    spawnDmgNumber(best.x, 2.3, best.z, dmg, crit);
-    sfx('hit');
-    if (best.isPed) {
-      best.obj.health -= dmg;
-      best.obj.flee = 2;
-      if (best.obj.health <= 0 && !best.obj.dead) {
-        best.obj.dead = true;
-        best.obj.mesh.rotation.x = Math.PI / 2; best.obj.mesh.position.y = 0.3;
-        feed(best.obj.hostile ? 'RIVAL DOWN — the crew saw it' : 'CIVILIAN DOWN — PD notified');
-        if (best.obj.hostile) { G.addRespectOnce = true; }
-        commitCrime(best.obj.hostile ? 3 : 4, best.obj.hostile ? 'RIVAL TAKEDOWN' : 'HOMICIDE');
+    update(dt, game) {
+      this.crimeClock -= dt;
+      for (let i = this.tracers.length - 1; i >= 0; i -= 1) {
+        this.tracers[i].life -= dt;
+        if (this.tracers[i].life <= 0) this.tracers.splice(i, 1);
       }
-    } else {
-      best.obj.condition = clamp(best.obj.condition - dmg * 0.35, 0, 100);
-      if (best.obj.cop) commitCrime(3, 'FIRING ON INTERDICTION UNIT');
-    }
-  }
+      for (let i = this.flashes.length - 1; i >= 0; i -= 1) {
+        this.flashes[i].life -= dt;
+        if (this.flashes[i].life <= 0) this.flashes.splice(i, 1);
+      }
+      this.updatePlayerFire(dt, game);
+      this.updateShooters(dt, game);
+    },
+
+    updatePlayerFire(dt, game) {
+      const p = game.player;
+      p.fireCd -= dt;
+      if (p.car || p.dead) return;
+      const weapon = weaponById(p.weapons[p.weaponIdx].id);
+      const wantFire = game.input.held.fire;
+      if (!wantFire) {
+        p.triggerHeld = false;
+        return;
+      }
+      if (!weapon.auto && p.triggerHeld) return;
+      if (p.fireCd > 0) return;
+      const slot = p.weapons[p.weaponIdx];
+      if (weapon.id !== 'fists' && slot.ammo <= 0) {
+        game.audio.dryFire();
+        p.fireCd = 0.3;
+        p.triggerHeld = true;
+        return;
+      }
+      p.triggerHeld = true;
+      p.fireCd = 1 / weapon.rate;
+      if (weapon.id !== 'fists') slot.ammo -= 1;
+      this.fireRay(game, p, weapon, true);
+    },
+
+    /** One trigger pull from `shooter` (the player or a ped) along its aim. */
+    fireRay(game, shooter, weapon, isPlayer) {
+      if (isPlayer) game.stats.shotsFired += 1;
+      const rng = game.rngCombat;
+      const baseAngle = shooter.angle;
+      const ox = shooter.x + Math.cos(baseAngle) * 16;
+      const oy = shooter.y + Math.sin(baseAngle) * 16;
+      this.flashes.push({ x: ox, y: oy, life: 0.05, max: 0.05, big: weapon.id === 'shotgun' });
+      game.audio.shot(weapon.id === 'shotgun' || weapon.id === 'rifle');
+      game.setDanger(shooter.x, shooter.y, 330);
+
+      for (let pellet = 0; pellet < weapon.pellets; pellet += 1) {
+        const angle = baseAngle + rng.range(-weapon.spread, weapon.spread);
+        const hit = this.castRay(game, shooter, ox, oy, angle, weapon.range);
+        const ex = hit ? hit.x : ox + Math.cos(angle) * weapon.range;
+        const ey = hit ? hit.y : oy + Math.sin(angle) * weapon.range;
+        this.tracers.push({ x0: ox, y0: oy, x1: ex, y1: ey, life: 0.07, max: 0.07, enemy: !isPlayer });
+        if (!hit) continue;
+        game.spawnSparks(ex, ey, weapon.id === 'shotgun' ? 7 : 4);
+        this.applyHit(game, shooter, hit, weapon, isPlayer);
+      }
+      if (isPlayer && this.crimeClock <= 0) {
+        this.crimeClock = 0.8;
+        game.police.report('shot', game, shooter.x, shooter.y);
+      }
+    },
+
+    /** March the ray in small steps; the first body, car or wall wins. */
+    castRay(game, shooter, ox, oy, angle, range) {
+      const step = 9;
+      const dx = Math.cos(angle) * step;
+      const dy = Math.sin(angle) * step;
+      let x = ox;
+      let y = oy;
+      for (let t = step; t < range; t += step) {
+        x += dx;
+        y += dy;
+        if (game.city.collide(x, y, 3)) return { kind: 'wall', x, y };
+        for (const ped of game.crowds.peds) {
+          if (ped === shooter || ped.dead) continue;
+          if (Math.abs(ped.x - x) < 11 && Math.abs(ped.y - y) < 11) return { kind: 'ped', ped, x, y };
+        }
+        for (const unit of game.police.units) {
+          const car = unit.car;
+          if (Math.abs(car.x - x) < car.def.width * 0.7 && Math.abs(car.y - y) < car.def.width * 0.7) return { kind: 'copcar', car, x, y };
+        }
+        for (const car of game.allCars()) {
+          if (car === shooter.car || car.parked && Math.abs(car.x - x) > 60) { /* still hittable below */ }
+          if (Math.abs(car.x - x) < car.def.width * 0.66 && Math.abs(car.y - y) < car.def.width * 0.66) return { kind: 'car', car, x, y };
+        }
+        if (!game.player.car && game.player !== shooter) {
+          const p = game.player;
+          if (Math.abs(p.x - x) < 11 && Math.abs(p.y - y) < 11) return { kind: 'player', x, y };
+        }
+      }
+      return null;
+    },
+
+    applyHit(game, shooter, hit, weapon, isPlayer) {
+      if (hit.kind === 'ped') {
+        hit.ped.hp -= weapon.damage * game.rngCombat.range(0.85, 1.15);
+        game.audio.hit();
+        if (hit.ped.hp <= 0 && isPlayer) {
+          game.police.report('pedDown', game, hit.ped.x, hit.ped.y);
+          game.stats.pedsDown += 1;
+        } else if (hit.ped.kind === 'walker' || hit.ped.kind === 'crew') {
+          hit.ped.state = 'flee';
+          hit.ped.wait = 2;
+        }
+        return;
+      }
+      if (hit.kind === 'copcar') {
+        hit.car.health -= weapon.damage * 0.4;
+        if (isPlayer) game.police.report('shotAtCop', game, hit.car.x, hit.car.y);
+        if (hit.car.health <= 0 && !hit.car.wreck) {
+          hit.car.wreck = true;
+          game.onCopDown(hit.car);
+        }
+        return;
+      }
+      if (hit.kind === 'car') {
+        hit.car.health -= weapon.damage * 0.32;
+        game.audio.hit();
+        if (hit.car.driver === 'traffic') game.ejectDriver(hit.car, true);
+        return;
+      }
+      if (hit.kind === 'player') {
+        game.player.takeDamage(weapon.damage * game.rngCombat.range(0.7, 1.1), game);
+      }
+    },
+
+    /** Mission shooters and armed drivers: they aim, they miss like humans, they reload. */
+    updateShooters(dt, game) {
+      const p = game.player;
+      for (const ped of game.crowds.peds) {
+        if (ped.kind !== 'shooter' || ped.dead) continue;
+        const target = p.car || p;
+        const d = Math.hypot(target.x - ped.x, target.y - ped.y);
+        ped.angle = Math.atan2(target.y - ped.y, target.x - ped.x);
+        // Close to a firing position and hold it; strafing looks alive.
+        if (d > 300) {
+          ped.x += Math.cos(ped.angle) * 95 * dt;
+          ped.y += Math.sin(ped.angle) * 95 * dt;
+        } else if (d < 130) {
+          ped.x -= Math.cos(ped.angle) * 60 * dt;
+          ped.y -= Math.sin(ped.angle) * 60 * dt;
+        } else {
+          ped.x += Math.cos(ped.angle + Math.PI / 2) * Math.sin(game.time * 0.9 + ped.id) * 34 * dt;
+          ped.y += Math.sin(ped.angle + Math.PI / 2) * Math.sin(game.time * 0.9 + ped.id) * 34 * dt;
+        }
+        const hit = game.city.collide(ped.x, ped.y, 11);
+        if (hit) {
+          ped.x += hit.nx * hit.depth;
+          ped.y += hit.ny * hit.depth;
+        }
+        ped.fireTimer -= dt;
+        if (ped.fireTimer <= 0 && d < 560) {
+          ped.fireTimer = game.rngCombat.range(0.5, 1.3);
+          const weapon = weaponById(ped.weaponId || 'smg');
+          // Human aim: lead badly, spray wide.
+          const savedAngle = ped.angle;
+          ped.angle += game.rngCombat.range(-0.09, 0.09);
+          this.fireRay(game, ped, weapon, false);
+          ped.angle = savedAngle;
+        }
+      }
+    },
+  };
 }
+
+export { CRIME_HEAT };

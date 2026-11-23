@@ -1,178 +1,433 @@
-// NEON PALMS — the 8-mission story campaign for Valentina 'Válvula' Ríos.
-// Stage types: goto | drive (goto in a car) | checkpoints | shoot | escape | duel.
-import { G, addCash, addRespect, feed, say, BOSS } from './config.js';
-import { markers } from './city.js';
-import { clamp } from './rng.js';
-import { spawnPed } from './pedestrians.js';
-import { commitCrime } from './police.js';
-import { sfx } from './audio.js';
+// The NEON PALMS campaign: fifteen jobs for Madame Zora Vane and the Solstice Crew, from
+// grocery runs to the Neon Crown grand prix, written as data and run by a small director.
+// The director offers the next job at its giver's marker, walks the stage list (drives,
+// pickups, collections, checkpoint races, shootouts, a car to steal, a tail to wreck, one
+// long escape), feeds the HUD its JOB panel text, pays out in cash and REP, and remembers
+// how a job failed so the city can gossip about it. Stage kinds:
+//   goto / deliver / escape — reach the point (deliver expects the car, escape starts hot)
+//   collect — touch every marked point      race — touch the checkpoints in order
+//   shoot — put every spawned gunman down   steal — get into the marked car
+//   chase — wreck the marked car, or pin it still against a wall
 
-const V = BOSS;
-const CREW_NPC = {
-  dario: { name: 'Dario', role: 'Wheelman — Ríos Crew', initials: 'DA', color: '#37c8ff' },
-  paz: { name: 'Paz', role: 'Wrench — Ríos Crew', initials: 'PA', color: '#7dff9a' },
-  ivo: { name: 'Ivo', role: 'Lookout — Ríos Crew', initials: 'IV', color: '#ffe066' },
-  kenji: { name: "Kenji 'Kingslip' Aoki", role: 'Rival — Kingslip Crew', initials: 'KA', color: '#ff4040' },
-};
+export function createMissions() {
+  const list = buildCampaign();
+  return {
+    list,
+    index: 0,
+    active: null,
+    lastFail: '',
 
-export const MISSIONS = [
-  { id: 'm1', name: 'GROCERY RUN FOR THE QUEEN', giver: 'Valentina', pay: 600, respect: 45, unlock: 'Neón Comet available at Club Válvula lot',
-    stages: [
-      { type: 'goto', x: -168, z: 44, label: 'Meet Valentina outside Club Válvula', who: V, line: 'New blood. I run the Ríos crew — tonight you run my groceries. First rule: the crew eats before the city does.' },
-      { type: 'drive', x: -104, z: 236, label: 'Take a car and reach the Palms Strip market', who: CREW_NPC.dario, line: 'Dario here. Press E by any parked car to take it — wheels are wheels. Market is south on the Strip.' },
-      { type: 'drive', x: 196, z: 150, label: 'Deliver the groceries to the Marina Alba bar, Puerto Alba', who: V, line: 'Groceries ride shotgun. Puerto Alba, Marina Alba bar — and if Interdiction sniffs you, lose them, do not lead them to me.' },
-      { type: 'drive', x: -120, z: 246, label: 'Park up at the Ríos garage on Palms Strip', who: CREW_NPC.paz, line: 'Paz, wrench. Bring my baby back in one piece and I will keep her purring. Garage is on the Strip.' },
-    ] },
-  { id: 'm2', name: 'STICKER SHOCK', giver: 'Valentina', pay: 850, respect: 55, unlock: 'Crew hotline — Ivo EYES OUT upgraded',
-    stages: [
-      { type: 'goto', x: -168, z: 44, label: 'Pick up the decal crate at Club Válvula', who: V, line: 'Fresh Ríos decals. Every racer on Club Mile wears my palm by Friday — start with the Underpass crew.' },
-      { type: 'drive', x: -252, z: -168, label: 'Deliver decals to the Underpass Garage', who: CREW_NPC.ivo, line: 'Ivo on lookout. The Underpass is quiet… too quiet. Keep your headlights honest.' },
-      { type: 'escape', x: -120, z: 246, label: 'Lose the heat and reach the Ríos garage', stars: 2, who: V, line: 'Interdiction rolled up on the drop! Break their sight line, let the stars cool, then come home.' },
-    ] },
-  { id: 'm3', name: 'QUALIFYING HEAT', giver: 'Valentina', pay: 1000, respect: 65, unlock: 'Street races open — 6 events on the map',
-    stages: [
-      { type: 'goto', x: -168, z: 44, label: 'Get your race brief at Club Válvula', who: V, line: 'Talk is cheap. The ladder is real: six races, six districts of pride. Show me a qualifying line first.' },
-      { type: 'checkpoints', cps: [[-60, 120], [60, 66], [186, 126], [66, 240], [-60, 246]], label: 'Hit all 5 qualifying checkpoints', who: CREW_NPC.dario, line: 'Rings are live. Thread them clean — position is tracked against the whole grid, so drive like it counts.' },
-    ] },
-  { id: 'm4', name: 'PARTS & RECKLESSNESS', giver: 'Paz', pay: 1300, respect: 75, unlock: 'Marea Lowrider unlocked in the garage list',
-    stages: [
-      { type: 'drive', x: 210, z: -160, label: 'Steal the parts-hauler in the Heights of San Verde', who: CREW_NPC.paz, line: 'A Kingslip hauler full of OUR parts sits in the Heights. Take the car, take the parts back. Simple theft, honest work.' },
-      { type: 'shoot', count: 3, x: 210, z: -160, label: 'Drop 3 Kingslip scouts guarding the hauler', who: CREW_NPC.ivo, line: 'Scouts on the hauler — three of them, all armed. F to fire. Make it loud, make it quick.' },
-      { type: 'drive', x: -252, z: -168, label: 'Deliver the hauler to the Underpass Garage', who: CREW_NPC.paz, line: 'Hauler is rolling. Underpass Garage, and try not to gift-wrap it for VIPER-3 on the way.' },
-    ] },
-  { id: 'm5', name: 'HARBOR LIGHTS', giver: 'Valentina', pay: 1600, respect: 85, unlock: 'Alba Interceptor bait car unlocked',
-    stages: [
-      { type: 'goto', x: 196, z: 150, label: 'Meet the harbour contact at Marina Alba', who: V, line: 'A package came in with the tide at Puerto Alba. No questions, no names — just drive it home.' },
-      { type: 'checkpoints', cps: [[120, 66], [60, 120], [-60, 66], [-120, 150]], label: 'Run the harbour route — 4 rings before the tide turns', who: CREW_NPC.dario, line: 'Harbour route is lit. Four rings, no shortcuts through the marina water, entendido?' },
-      { type: 'drive', x: -168, z: 44, label: 'Deliver the package to Club Válvula', who: V, line: 'Club Válvula. Back door. If the package ticks, drive faster.' },
-    ] },
-  { id: 'm6', name: 'PINK SLIP PRELUDE', giver: 'Valentina', pay: 2000, respect: 100, unlock: 'Pink-slip duels open on Palms Strip',
-    stages: [
-      { type: 'goto', x: -228, z: 228, label: 'Face Kenji at the Strip duel marker', who: CREW_NPC.kenji, line: 'Ríos errand-runner. My Ríos Special says your whole crew is a grocery list with headlights.' },
-      { type: 'duel', cps: [[-66, 186], [66, 126], [186, 186], [246, 294]], label: 'Beat Kenji to the marina finish — pink slip rules', who: V, line: 'He insulted my crew on my Strip. Take his slip, or do not come back to my club.' },
-    ] },
-  { id: 'm7', name: 'INTERDICTION BLUES', giver: 'Ivo', pay: 2400, respect: 110, unlock: 'CONDOR evasion training — sight decays faster',
-    stages: [
-      { type: 'goto', x: -240, z: 110, label: 'Meet Ivo on Club Mile', who: CREW_NPC.ivo, line: 'Interdiction built a case on the whole crew. Tonight they raid — I need you loud and visible, a decoy with a smile.' },
-      { type: 'escape', x: -252, z: -168, label: 'Draw 3 stars of heat, then vanish to the Underpass Garage', stars: 3, who: CREW_NPC.ivo, line: 'CONDOR will be up at four stars. Break sight, kill the clock, vanish into the Underpass.' },
-    ] },
-  { id: 'm8', name: 'THE MIDNIGHT GRAND PRIX', giver: 'Valentina', pay: 6000, respect: 250, unlock: 'PALMS LEGEND ceremony + Golden Neón livery',
-    stages: [
-      { type: 'goto', x: -168, z: 44, label: 'Take the crown brief at Club Válvula', who: V, line: 'One race left between you and legend. The whole city starts at midnight — every district, every rival, my crown on the line.' },
-      { type: 'checkpoints', cps: [[60, 126], [186, 66], [294, -66], [186, -186], [66, -294], [-66, -186], [-186, -66], [-294, 66], [-186, 186], [-60, 246]], label: 'Win the Midnight Grand Prix — 10 rings across all five districts', who: V, line: 'Ten rings. Five districts. One legend. GO.' },
-    ] },
-];
+    get done() {
+      return this.index >= list.length;
+    },
 
-export function startMission(idx) {
-  const def = MISSIONS[idx];
-  if (!def) return false;
-  G.mission = { def, idx, stage: 0, shotsHit: 0, spawned: false, cp: 0, duelRival: null, elapsed: 0 };
-  const st = def.stages[0];
-  say(st.who, st.line, 9);
-  feed(`MISSION — ${def.name} started (Valentina 'Válvula' Ríos)`);
-  return true;
-}
+    current() {
+      return this.done ? null : list[this.index];
+    },
 
-export function currentStage() {
-  return G.mission ? G.mission.def.stages[G.mission.stage] : null;
-}
+    /** Where the next job is offered, or null when the campaign is finished. */
+    offerPoint() {
+      const mission = this.current();
+      if (!mission || this.active) return null;
+      return mission.acceptAt;
+    },
 
-function advance() {
-  const m = G.mission;
-  m.stage++; m.shotsHit = 0; m.cp = 0; m.spawned = false;
-  if (m.stage >= m.def.stages.length) { completeMission(); return; }
-  const st = m.def.stages[m.stage];
-  say(st.who, st.line, 9);
-  feed(`OBJECTIVE — ${st.label}`);
-}
+    accept(game) {
+      const mission = this.current();
+      if (!mission || this.active) return false;
+      this.active = {
+        mission,
+        stageIdx: 0,
+        stage: null,
+        entities: [],
+        got: 0,
+        cp: 0,
+        pinTimer: 0,
+        timeLeft: mission.stages[0].time || 0,
+        passenger: null,
+      };
+      game.showDialogue(mission.intro);
+      this.enterStage(game);
+      game.stats.jobsTaken += 1;
+      return true;
+    },
 
-function completeMission() {
-  const m = G.mission;
-  const def = m.def;
-  addCash(def.pay);
-  const dName = 'Palms Strip';
-  addRespect(def.respect, dName);
-  G.stats.missionsDone++;
-  const medal = m.elapsed < 240 ? 'GOLD' : m.elapsed < 480 ? 'SILVER' : 'BRONZE';
-  G.stats.medals[def.id] = medal;
-  G.banner = {
-    title: 'MISSION PASSED',
-    lines: [`${def.name}`, `+$${def.pay} · RESPECT +${def.respect} · Medal ${medal}`, `Unlock: ${def.unlock}`],
-    until: G.time + 7,
-  };
-  say(V, def.id === 'm8' ? 'PALMS LEGEND. The city is yours — the crew is family. Neón forever.' : `Paid in full: $${def.pay}. ${def.unlock}. Come see me for the next rung.`, 8);
-  feed(`MISSION PASSED — ${def.name}: +$${def.pay}, RESPECT +${def.respect}`);
-  sfx('passed');
-  G.mission = null;
-  G.missionIdx = m.idx + 1;
-}
+    enterStage(game) {
+      const a = this.active;
+      const stage = a.mission.stages[a.stageIdx];
+      a.stage = stage;
+      a.got = 0;
+      a.cp = 0;
+      a.pinTimer = 0;
+      a.timeLeft = stage.time || 0;
+      a.entities = game.spawnStageEntities(stage, a);
+      if (stage.heat) game.police.heat = Math.max(game.police.heat, stage.heat);
+      if (stage.tod !== undefined) game.tod = stage.tod;
+      if (stage.line) game.showDialogue(stage.line);
+    },
 
-export function updateMissions(dt) {
-  const m = G.mission;
-  markers.mission.visible = false;
-  if (!m) {
-    // offer next mission at Club Válvula
-    if (G.missionIdx < MISSIONS.length && !G.race && !G.duel) {
-      markers.mission.visible = true;
-      markers.mission.position.set(-168, 7, 44);
-      markers.mission.rotation.y = Math.atan2(G.player.x + 168, G.player.z - 44);
-      const dx = G.player.x + 168, dz = G.player.z - 44;
-      if (dx * dx + dz * dz < 36 && !G.player.inCar) {
-        G.prompt = `E — TALK TO VALENTINA (${MISSIONS[G.missionIdx].name})`;
-        if (G.consumeE) startMission(G.missionIdx);
+    completeStage(game) {
+      const a = this.active;
+      a.stageIdx += 1;
+      if (a.stageIdx >= a.mission.stages.length) {
+        this.completeMission(game);
+        return;
       }
-    }
-    return;
-  }
-  m.elapsed += dt;
-  const st = m.def.stages[m.stage];
-  const p = G.player;
-  const showMarker = (x, z) => {
-    markers.mission.visible = true;
-    markers.mission.position.set(x, 7, z);
-    markers.mission.rotation.y = Math.atan2(p.x - x, p.z - z);
-  };
-  if (st.type === 'goto' || st.type === 'drive') {
-    showMarker(st.x, st.z);
-    const d2 = (p.x - st.x) ** 2 + (p.z - st.z) ** 2;
-    const ok = st.type === 'goto' ? d2 < 30 : (G.player.inCar && d2 < 64);
-    if (ok) advance();
-  } else if (st.type === 'checkpoints') {
-    const [tx, tz] = st.cps[Math.min(m.cp, st.cps.length - 1)];
-    showMarker(tx, tz);
-    markers.checkpoint.visible = true;
-    markers.checkpoint.position.set(tx, 7, tz);
-    markers.checkpoint.rotation.y = Math.atan2(p.x - tx, p.z - tz);
-    if (Math.hypot(p.x - tx, p.z - tz) < 11 && G.player.inCar) {
-      m.cp++; sfx('coin'); feed(`CHECKPOINT ${m.cp}/${st.cps.length}`);
-      if (m.cp >= st.cps.length) { markers.checkpoint.visible = false; advance(); }
-    }
-  } else if (st.type === 'shoot') {
-    showMarker(st.x, st.z);
-    if (!m.spawned) {
-      m.spawned = true;
-      for (let i = 0; i < st.count; i++) {
-        const ped = spawnPed(st.x + (i - 1) * 7, st.z + (i % 2) * 6 - 3, { hostile: true, name: 'Kingslip Scout' });
-        ped.health = 50;
+      this.enterStage(game);
+    },
+
+    completeMission(game) {
+      const mission = this.active.mission;
+      game.earn(mission.pay);
+      game.rep += mission.rep;
+      game.stats.jobsDone += 1;
+      game.showBanner('MISSION PASSED', mission.title, mission.pay, mission.rep);
+      game.showDialogue(mission.outro);
+      game.audio.success();
+      this.index += 1;
+      this.active = null;
+    },
+
+    fail(game, reason) {
+      if (!this.active) return;
+      this.lastFail = reason;
+      game.showBanner('MISSION FAILED', reason, 0, 0);
+      game.audio.fail();
+      // Stage entities (gunmen, target cars) fold back into the city as ambient life.
+      for (const entity of this.active.entities) {
+        if (entity.kind === 'shooter' && !entity.ref.dead) entity.ref.kind = 'walker';
+        if (entity.kind === 'targetCar') entity.ref.driver = 'traffic';
       }
-      feed('KINGSLIP SCOUTS — hostiles on site');
-    }
-    const alive = G.peds.filter((q) => q.hostile && !q.dead).length;
-    if (alive === 0 && m.spawned) advance();
-  } else if (st.type === 'escape') {
-    if (!m.spawned) { m.spawned = true; commitCrime(st.stars, 'INTERDICTION RAID — decoy run'); }
-    showMarker(st.x, st.z);
-    const d2 = (p.x - st.x) ** 2 + (p.z - st.z) ** 2;
-    if (d2 < 64 && G.wanted === 0) advance();
-    else if (d2 < 64 && G.wanted > 0) { G.prompt = 'LOSE THE HEAT — break police sight until the stars are gone'; }
-  } else if (st.type === 'duel') {
-    const [tx, tz] = st.cps[Math.min(m.cp, st.cps.length - 1)];
-    showMarker(tx, tz);
-    if (G.player.inCar && Math.hypot(p.x - tx, p.z - tz) < 11) {
-      m.cp++; sfx('coin'); feed(`DUEL CHECKPOINT ${m.cp}/${st.cps.length} — ahead of Kenji`);
-      if (m.cp >= st.cps.length) advance();
-    } else if (!G.player.inCar) {
-      G.prompt = 'PINK-SLIP DUEL — you need to be driving';
-    }
-  }
+      this.active = null;
+    },
+
+    onPlayerDown(game) {
+      if (this.active) this.fail(game, game.player.dead ? 'Rio went down mid-job.' : 'The PD took Rio mid-job.');
+    },
+
+    /** The gold marker the world and the map should draw, if any. */
+    target() {
+      const a = this.active;
+      if (a) {
+        const stage = a.stage;
+        if (stage.kind === 'race') return { x: stage.checkpoints[a.cp][0], y: stage.checkpoints[a.cp][1], label: stage.label };
+        if (stage.kind === 'collect') {
+          const left = stage.points.find((pt, i) => !a['got' + i]);
+          if (left) return { x: left[0], y: left[1], label: stage.label };
+        }
+        if (stage.kind === 'chase' || stage.kind === 'steal') {
+          const car = a.entities.find((e) => e.kind === 'targetCar');
+          if (car) return { x: car.ref.x, y: car.ref.y, label: stage.label };
+        }
+        if (stage.x !== undefined) return { x: stage.x, y: stage.y, label: stage.label };
+        return null;
+      }
+      const mission = this.current();
+      if (mission) return { x: mission.acceptAt.x, y: mission.acceptAt.y, label: `Meet ${mission.giver}` };
+      return null;
+    },
+
+    /** JOB panel text for the HUD. */
+    progress() {
+      const a = this.active;
+      if (!a) {
+        if (this.done) return { job: 'STORY COMPLETE', title: 'NEON CROWN', stage: 'Palmera is yours. Free roam.', frac: 1, next: 'The city keeps turning: races, shops, trouble.' };
+        const mission = this.current();
+        return {
+          job: `JOB ${this.index + 1}/15`,
+          title: mission.title,
+          stage: `Meet ${mission.giver}`,
+          frac: 0,
+          next: mission.teaser,
+        };
+      }
+      const stage = a.stage;
+      let frac = 0;
+      if (stage.kind === 'race') frac = a.cp / stage.checkpoints.length;
+      else if (stage.kind === 'collect') frac = a.got / stage.points.length;
+      else if (stage.kind === 'shoot') {
+        const total = a.entities.filter((e) => e.kind === 'shooter').length || 1;
+        const down = a.entities.filter((e) => e.kind === 'shooter' && e.ref.dead).length;
+        frac = down / total;
+      } else if (a.mission.stages.length > 1) frac = a.stageIdx / a.mission.stages.length;
+      let stageText = stage.label;
+      if (stage.kind === 'race') stageText = `${stage.label} — checkpoint ${a.cp + 1}/${stage.checkpoints.length}`;
+      if (stage.kind === 'collect') stageText = `${stage.label} — ${a.got}/${stage.points.length}`;
+      if (a.timeLeft > 0) stageText += ` — ${Math.ceil(a.timeLeft)}s`;
+      return {
+        job: `JOB ${this.index + 1}/15`,
+        title: a.mission.title,
+        stage: stageText,
+        frac,
+        next: stage.hint || '',
+      };
+    },
+
+    update(dt, game) {
+      const a = this.active;
+      if (!a) return;
+      const stage = a.stage;
+      const p = game.player;
+      if (a.timeLeft > 0) {
+        a.timeLeft -= dt;
+        if (a.timeLeft <= 0) {
+          this.fail(game, 'Out of time. The job walks away.');
+          return;
+        }
+      }
+      // The passenger, when a stage carries one, rides or follows.
+      if (a.passenger && !a.passenger.dead) {
+        if (p.car) {
+          a.passenger.x = p.car.x;
+          a.passenger.y = p.car.y;
+          a.passenger.hidden = true;
+        } else {
+          a.passenger.hidden = false;
+          const d = Math.hypot(p.x - a.passenger.x, p.y - a.passenger.y);
+          if (d > 30) {
+            a.passenger.x += ((p.x - a.passenger.x) / d) * 150 * dt;
+            a.passenger.y += ((p.y - a.passenger.y) / d) * 150 * dt;
+            a.passenger.angle = Math.atan2(p.y - a.passenger.y, p.x - a.passenger.x);
+          }
+        }
+      }
+      const reach = (x, y, radius) => Math.hypot(p.x - x, p.y - y) < radius;
+      switch (stage.kind) {
+        case 'goto':
+          if (reach(stage.x, stage.y, 80)) this.completeStage(game);
+          break;
+        case 'deliver':
+          if (p.car && reach(stage.x, stage.y, 92)) this.completeStage(game);
+          break;
+        case 'escape':
+          if (reach(stage.x, stage.y, 92)) this.completeStage(game);
+          break;
+        case 'collect': {
+          let all = true;
+          stage.points.forEach((pt, i) => {
+            if (a['got' + i]) return;
+            if (reach(pt[0], pt[1], 92)) {
+              a['got' + i] = true;
+              a.got += 1;
+              game.audio.pickup();
+              game.spawnSparks(pt[0], pt[1], 6);
+            } else all = false;
+          });
+          if (all) this.completeStage(game);
+          break;
+        }
+        case 'race': {
+          const cp = stage.checkpoints[a.cp];
+          if (cp && reach(cp[0], cp[1], 105)) {
+            a.cp += 1;
+            game.audio.pickup();
+            if (a.cp >= stage.checkpoints.length) this.completeStage(game);
+          }
+          break;
+        }
+        case 'shoot': {
+          const shooters = a.entities.filter((e) => e.kind === 'shooter');
+          if (shooters.length > 0 && shooters.every((e) => e.ref.dead)) this.completeStage(game);
+          break;
+        }
+        case 'steal': {
+          const car = a.entities.find((e) => e.kind === 'targetCar');
+          if (car && p.car === car.ref) this.completeStage(game);
+          break;
+        }
+        case 'chase': {
+          const car = a.entities.find((e) => e.kind === 'targetCar');
+          if (!car) {
+            this.completeStage(game);
+            break;
+          }
+          const target = car.ref;
+          const speed = Math.hypot(target.vx, target.vy);
+          if (target.health <= 20 || target.wreck) {
+            this.completeStage(game);
+          } else if (speed < 12 && Math.hypot(p.x - target.x, p.y - target.y) < 78) {
+            a.pinTimer += dt;
+            if (a.pinTimer > 2.2) this.completeStage(game);
+          } else {
+            a.pinTimer = 0;
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    },
+  };
+}
+
+const Z = (text) => ({ who: 'ZORA', text });
+const R = (text) => ({ who: 'RIO', text });
+const P = (text) => ({ who: 'PAZ', text });
+const L = (text) => ({ who: 'LUCIA', text });
+const T = (text) => ({ who: 'TOM\u00c1S', text });
+const A = (text) => ({ who: 'AITANA', text });
+const D = (text) => ({ who: 'DISPATCH', text });
+
+function buildCampaign() {
+  const club = { x: 1850, y: 1676, name: 'Club Solstice' };
+  const garage = { x: 2040, y: 1676, name: 'Garage Solstice' };
+  const marina = { x: 3900, y: 3220, name: 'Port Azure Marina' };
+  const safehouse = { x: 430, y: 560, name: 'Safehouse Brisa' };
+  const meet = { x: 1200, y: 2150, name: 'Midnight Meet' };
+  const resort = { x: 3050, y: 330, name: 'Hotel Marea' };
+  const vesper = { x: 1200, y: 2050, name: 'Vesper Clubhouse' };
+
+  return [
+    {
+      title: 'Fresh Off the Bus', giver: 'Madame Zora', acceptAt: club, pay: 600, rep: 45,
+      teaser: 'A woman in pink neon is waiting to size you up.',
+      intro: [Z('So. The famous Rio C\u00e1rdenas, with one bag and no car.'), R('The car is the part I was hoping you could help with.'), Z('Paz keeps a Comet for runners. Take it. Drive Lucia to the marina — gently.')],
+      stages: [
+        { kind: 'goto', x: garage.x, y: garage.y, label: 'Take the Comet at Garage Solstice', hint: 'Press E at the gold Comet.' },
+        { kind: 'deliver', x: marina.x, y: marina.y, label: 'Drive Lucia to Port Azure Marina', hint: 'She bruises. The car may.', passenger: true },
+        { kind: 'goto', x: club.x, y: club.y, label: 'Return to Club Solstice', hint: 'Zora pays in person.' },
+      ],
+      outro: [L('He drives like the street owes him money. I like it.'), Z('Then Palmera will too. Welcome to the Solstice Crew.')],
+    },
+    {
+      title: 'Grocery Getter', giver: 'Madame Zora', acceptAt: club, pay: 500, rep: 40,
+      teaser: 'Three bodegas, three bags, no questions.',
+      intro: [Z('The club eats, Rio. Three bodegas in the Quarter owe us groceries — the paper-bag kind.'), R('And if they argue?'), Z('Then smile. You are the smile of this crew now.')],
+      stages: [
+        { kind: 'collect', points: [[1200, 1128], [2205, 1128], [1850, 560]], label: 'Collect the three bags', hint: 'Gold markers, kerbside. Drive through them.' },
+        { kind: 'deliver', x: club.x, y: club.y, label: 'Bring the bags to Club Solstice', hint: 'Mind the eggs. There are no eggs. Mind them anyway.' },
+      ],
+      outro: [Z('Warm, unbroken, and nobody called the police. You are learning.')],
+    },
+    {
+      title: 'Taxi for the Devil', giver: 'Madame Zora', acceptAt: club, pay: 900, rep: 60,
+      teaser: 'An accountant who knows too much needs the marina.',
+      intro: [Z('Tom\u00e1s Rey cooked books for the Vespers. Now he cooks for us — if he lives.'), T('There is a car outside. It has been outside for two days. I counted.'), R('Then we drive fast, se\u00f1or. Get in.')],
+      stages: [
+        { kind: 'goto', x: resort.x, y: resort.y, label: 'Pick up Tom\u00e1s at Hotel Marea', hint: 'He is the one sweating through a suit.' },
+        { kind: 'deliver', x: marina.x, y: marina.y, label: 'Get Tom\u00e1s to the marina boat', hint: 'A Vesper tail is behind you. Do not stop.', passenger: true, tail: true },
+      ],
+      outro: [T('I saw my life. It was mostly spreadsheets.'), Z('He lives, the books are ours. Good driving, wheelman.')],
+    },
+    {
+      title: 'First Blood Neon', giver: 'Madame Zora', acceptAt: club, pay: 800, rep: 70,
+      teaser: 'Vesper scouts are watching the club. Unwatch them.',
+      intro: [Z('Three Vesper boys are parked up the Mile taking photographs of my door.'), R('You want the camera?'), Z('I want the photographers to develop a sudden fear of photography.')],
+      stages: [
+        { kind: 'shoot', spots: [[2500, 1748], [2620, 1806], [2740, 1752]], weapon: 'smg', label: 'Run off the Vesper scouts', hint: 'Slot 3 if you bought the SMG. Fists if you are feeling historical.' },
+        { kind: 'goto', x: club.x, y: club.y, label: 'Report back to Zora', hint: 'Wipe your shoes. It is a nice club.' },
+      ],
+      outro: [Z('The Mile breathes again. The Vespers will answer, but not tonight.')],
+    },
+    {
+      title: 'Harbour Lights', giver: 'Paz Ibarra', acceptAt: garage, pay: 1100, rep: 80,
+      teaser: 'A crate fell off a boat. Paz wants it before customs wakes.',
+      intro: [P('A marine engine, still in its crate, sitting on the marina quay like a lost dog.'), R('And the police?'), P('Asleep. Until you start the car, probably. Bring it to my garage.')],
+      stages: [
+        { kind: 'collect', points: [[3900, 3180]], label: 'Take the crate at the marina', hint: 'It is heavy. The car will forgive you.' },
+        { kind: 'escape', x: garage.x, y: garage.y, label: 'Lose the heat, deliver to Garage Solstice', hint: 'Repaint at Spray & Pay if it gets loud.', heat: 210 },
+      ],
+      outro: [P('Beautiful. This engine sings in a boat by Friday.'), Z('And Paz sings at the club. Everyone wins.')],
+    },
+    {
+      title: 'Cielo Run', giver: 'Paz Ibarra', acceptAt: meet, pay: 1000, rep: 85,
+      teaser: 'The Midnight Meet wants a hill time. The hills want respect.',
+      intro: [P('The Meet runs a hill ladder, Rio. Cielo Heights, five gates, my stopwatch.'), R('And the prize?'), P('Money. And the hill crowd saying your name right.')],
+      stages: [
+        { kind: 'race', checkpoints: [[785, 645], [785, 75], [2205, 75], [2205, 645], [430, 560]], label: 'Cielo Run', hint: 'Gold rings. Order matters. So does not dying.' },
+      ],
+      outro: [P('The hill says C\u00e1rdenas now. I heard it myself.')],
+    },
+    {
+      title: 'The Accountant\u2019s Ledger', giver: 'Madame Zora', acceptAt: club, pay: 1400, rep: 90,
+      teaser: 'A gold limo in Coral Beach is full of Vesper paper.',
+      intro: [Z('The Vespers keep their real books in a gold Aurum, parked at the Marea like a trophy.'), R('You want the car, or the books?'), Z('I want the car. The books are a bonus. The look on their faces is the tip.')],
+      stages: [
+        { kind: 'steal', x: resort.x, y: resort.y, model: 'lux', color: '#c8a028', label: 'Steal the gold Aurum Limo', hint: 'It is the gold one. It is always the gold one.' },
+        { kind: 'deliver', x: garage.x, y: garage.y, label: 'Deliver the limo to Garage Solstice', hint: 'Paz will crack it like an egg.' },
+      ],
+      outro: [Z('Ledgers, names, dates. Dante Ferro keeps very tidy sins.')],
+    },
+    {
+      title: 'Static', giver: 'Madame Zora', acceptAt: club, pay: 1300, rep: 95,
+      teaser: 'A Vesper stash house in the Flats is broadcasting. Silence it.',
+      intro: [Z('The Vespers run a radio stash out of the Flats — guns in, gossip out.'), R('How loud do you want it?'), Z('Loud enough that Dante hears the silence after.')],
+      stages: [
+        { kind: 'shoot', spots: [[1150, 1980], [1260, 2030], [1180, 2120], [1300, 2100]], weapon: 'smg', label: 'Clear the stash house guard', hint: 'Four guns. Count them twice.' },
+        { kind: 'collect', points: [[1200, 2050], [1240, 2080]], label: 'Take the stash radios', hint: 'Crates by the door.' },
+      ],
+      outro: [D('...static...'), Z('That is the sound of the Flats changing owners.')],
+    },
+    {
+      title: 'Midnight Milk Run', giver: 'Paz Ibarra', acceptAt: marina, pay: 1600, rep: 100,
+      teaser: 'One cooler, one sleeping city, one clock.',
+      intro: [P('Medicine for a rich man\u2019s mother, landed at midnight, needed in Cielo before it warms.'), R('How long do I have?'), P('Long enough if you are who Zora says. Short if you are not.')],
+      stages: [
+        { kind: 'collect', points: [[3900, 3180]], label: 'Take the cooler at the marina', hint: 'Keep it cold. Drive like winter.' },
+        { kind: 'deliver', x: safehouse.x, y: safehouse.y, label: 'Deliver to Safehouse Brisa — fast', hint: 'The clock on the JOB panel is real.', time: 150 },
+      ],
+      outro: [P('Cold as the sea it crossed. The hill owes us now.')],
+    },
+    {
+      title: 'VIP Escort', giver: 'Madame Zora', acceptAt: club, pay: 1800, rep: 110,
+      teaser: 'Aitana Mar sings at the Solstice tonight — if she arrives.',
+      intro: [Z('Aitana Mar, the voice of Coral Beach, sings my stage tonight.'), A('The Vespers offered me a contract too. Their pen was a knife.'), R('Then we take the loud way home. Stay down when I say.')],
+      stages: [
+        { kind: 'goto', x: resort.x, y: resort.y, label: 'Collect Aitana at Hotel Marea', hint: 'She travels with one bag and forty opinions.' },
+        { kind: 'shoot', spots: [[2500, 1748], [2620, 1806], [2740, 1752]], weapon: 'rifle', label: 'Ambush on the Mile — protect Aitana', hint: 'They chose the place. Bad choice.', passenger: true },
+        { kind: 'deliver', x: club.x, y: club.y, label: 'Bring Aitana to Club Solstice', hint: 'The stage is lit. So is she.', passenger: true },
+      ],
+      outro: [A('You drive like a song with no chorus. I adore it.'), Z('Tonight the Mile hears her. Tomorrow it hears of you.')],
+    },
+    {
+      title: 'Grand Theft Marina', giver: 'Paz Ibarra', acceptAt: garage, pay: 2200, rep: 120,
+      teaser: 'Two rich toys sleep at the marina. Paz has the keys to neither.',
+      intro: [P('A Comet and a Vader, marina lot, owners at sea until Sunday.'), R('Both of them?'), P('Both. I am redecorating the garage with other people\u2019s taste.')],
+      stages: [
+        { kind: 'steal', x: marina.x, y: marina.y, model: 'comet', color: '#2456c8', label: 'Steal the blue Comet at the marina', hint: 'First toy. The blue one.' },
+        { kind: 'deliver', x: garage.x, y: garage.y, label: 'Park the Comet at Garage Solstice', hint: 'One down.' },
+        { kind: 'steal', x: marina.x, y: marina.y, model: 'vader', color: '#15151c', label: 'Steal the black Vader at the marina', hint: 'Second toy. It growls.' },
+        { kind: 'deliver', x: garage.x, y: garage.y, label: 'Park the Vader at Garage Solstice', hint: 'Paz is grinning already.' },
+      ],
+      outro: [P('My garage has never looked this expensive. Neither have I.')],
+    },
+    {
+      title: 'Heat Signature', giver: 'Madame Zora', acceptAt: club, pay: 2000, rep: 130,
+      teaser: 'The PD wants a face for the poster. Give them a ghost instead.',
+      intro: [Z('Interdiction printed your face tonight, Rio. Four stars of it.'), R('And I do what with my fame?'), Z('You run it into the ground. The safehouse. Do not stop for autographs.')],
+      stages: [
+        { kind: 'escape', x: safehouse.x, y: safehouse.y, label: 'Escape to Safehouse Brisa', hint: 'Four stars. Alleys are doors. Use them.', heat: 410 },
+      ],
+      outro: [Z('The poster comes down tomorrow. Ghosts do not pose.')],
+    },
+    {
+      title: 'Vesper\u2019s Last Party', giver: 'Madame Zora', acceptAt: club, pay: 2600, rep: 150,
+      teaser: 'Dante is throwing a party at his clubhouse. Crash it permanently.',
+      intro: [Z('Dante Ferro is celebrating the ledger he does not know he lost.'), R('How many candles?'), Z('Six guns, last count. Blow them all out, Rio.')],
+      stages: [
+        { kind: 'shoot', spots: [[1120, 1980], [1200, 1960], [1290, 1990], [1150, 2120], [1240, 2130], [1330, 2060]], weapon: 'rifle', label: 'Crash the Vesper clubhouse', hint: 'Six guns. The rifle earns its slot tonight.' },
+        { kind: 'goto', x: vesper.x, y: vesper.y, label: 'Walk into the quiet clubhouse', hint: 'Mind the glass.' },
+      ],
+      outro: [Z('The Flats fly Solstice colours by morning. You did that.')],
+    },
+    {
+      title: 'The Set-Up', giver: 'Madame Zora', acceptAt: club, pay: 3000, rep: 170,
+      teaser: 'Dante runs tonight, in a black Vader. Finish the argument.',
+      intro: [Z('Dante is running for the port with what is left of his pride, in a black Vader.'), R('Running is still driving.'), Z('Then out-drive him. Wreck the car. Let him walk home through his old empire.')],
+      stages: [
+        { kind: 'chase', x: 2205, y: 645, model: 'vader', color: '#15151c', label: 'Wreck Dante\u2019s Vader', hint: 'Ram him into the architecture, or pin him still.' },
+        { kind: 'goto', x: club.x, y: club.y, label: 'Come home to Club Solstice', hint: 'Slowly. Let the Mile see you cruise it.' },
+      ],
+      outro: [Z('He walked. The whole Quarter watched him walk. It is over, Rio — almost.')],
+    },
+    {
+      title: 'Neon Crown', giver: 'Madame Zora', acceptAt: club, pay: 6000, rep: 300,
+      teaser: 'One race, every district, the whole PD watching. Take the crown.',
+      intro: [Z('The Midnight Grand Prix, Rio. Every district, one lap, my name on the trophy.'), R('And Interdiction?'), Z('Invited. Three stars of them. Win anyway — win as a Solstice.')],
+      stages: [
+        { kind: 'race', checkpoints: [[4335, 645], [4335, 2925], [3900, 3220], [75, 2925], [75, 75], [2205, 1215], [1850, 1620]], label: 'Neon Crown Grand Prix', hint: 'Seven gates around the whole city. The crown is the last one.', heat: 310 },
+      ],
+      outro: [Z('PALMERA! Say his name right: C\u00c1RDENAS, king of the Mile!'), R('Long live the crew.'), Z('Long live the Neon Crown.')],
+    },
+  ];
 }
