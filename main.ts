@@ -1,9 +1,9 @@
-// NEON PALMS — hand-in program for the gta6-01 bounty (Node 22, standard library only).
-// The game itself lives in game/ as plain static files (index.html + ES modules + a vendored
-// three.js) that a desktop browser loads fully offline. This program copies game/ and
-// screenshots/ from beside itself into the output directory (MAKEFUN_OUTPUT_DIR, defaulting
-// to /output) and writes dossier.json there with the vendored make.fun library, using the
-// scorer's own caps so an entry the scorer would refuse is refused here first.
+// NEON PALMS hand-in program (Node 22, standard library only). The game itself is the
+// game/ folder beside this file — plain static files a desktop browser loads offline —
+// and this program delivers it: it copies game/ and screenshots/ into the output
+// directory and writes dossier.json, the summary the judge reads, using the vendored
+// make.fun library. Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for
+// /output:  mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,6 +20,9 @@ if (existsSync(join(here, 'screenshots'))) {
   cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
 }
 
+// The scorer's own caps, from the kit's gate reference: an entry is refused for more
+// than 4 screenshots or one over 256 KiB, more than 993 files or 48 MiB in game/, or a
+// game/ path over 1000 bytes. text_max_bytes alone shapes the dossier's bytes.
 writeFileSync(
   join(out, 'dossier.json'),
   buildDossier(out, {
